@@ -1,0 +1,16 @@
+[Unit]
+Description=GeoCongoAI Mtumishi Worker
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/geocongoai-mtumishi-worker
+EnvironmentFile=/opt/geocongoai-mtumishi-worker/.env
+ExecStart=/opt/geocongoai-mtumishi-worker/.venv/bin/python -m worker.main
+Restart=always
+RestartSec=5
+User=geocongoai
+Group=geocongoai
+
+[Install]
+WantedBy=multi-user.target
