@@ -21,8 +21,10 @@ def estimate_final_units(run: LeasedRun, result: Dict[str, Any]) -> int:
 
 def execute_run(run: LeasedRun, config: WorkerConfig) -> Dict[str, Any]:
     """Execute a single Mtumishi job."""
+    runtime_type = run.requested_runtime or config.default_runtime
+
     mtumishi = Mtumishi(
-        runtime_type=run.requested_runtime or "antigravity",
+        runtime_type=runtime_type,
         qgis_rpc_port=config.qgis_rpc_port,
         runtime_kwargs={
             "api_key": config.gemini_api_key,
@@ -45,7 +47,7 @@ def execute_run(run: LeasedRun, config: WorkerConfig) -> Dict[str, Any]:
         "metadata": {
             "user_id": run.user_id,
             "run_id": run.id,
-            "requested_runtime": run.requested_runtime,
+            "requested_runtime": runtime_type,
             "model_name": run.model_name or config.default_model_name,
             "worker_id": config.worker_id,
         },

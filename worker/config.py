@@ -45,6 +45,7 @@ def load_config() -> WorkerConfig:
         lease_seconds=int(os.getenv("MTUMISHI_LEASE_SECONDS", "120")),
         qgis_rpc_port=int(os.getenv("MTUMISHI_QGIS_RPC_PORT", "65534")),
         default_reserved_units=int(os.getenv("MTUMISHI_DEFAULT_RESERVED_UNITS", "12")),
+        default_runtime=os.getenv("MTUMISHI_DEFAULT_RUNTIME", "native"),
         default_model_name=os.getenv("MTUMISHI_MODEL_NAME", "gemini-2.5-flash"),
         workspaces=workspaces or ["."],
     )

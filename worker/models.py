@@ -15,6 +15,7 @@ class WorkerConfig:
     lease_seconds: int
     qgis_rpc_port: int
     default_reserved_units: int
+    default_runtime: str
     default_model_name: str
     workspaces: list[str]
 
