@@ -52,29 +52,45 @@ class SupabaseRunStore:
         )
 
     def mark_completed(self, run: LeasedRun, result: Dict[str, Any], units_final: int) -> None:
-        """Persist successful execution results."""
-        payload = {
-            "status": "completed",
-            "summary": result.get("summary"),
-            "steps_json": result.get("steps", []),
-            "qgis_scripts_json": result.get("qgis_scripts", []),
-            "result_json": result,
-            "units_final": units_final,
-            "lease_until": None,
-            "finished_at": utc_now_iso(),
-            "updated_at": utc_now_iso(),
-        }
-        self.client.table("agent_runs").update(payload).eq("id", run.id).execute()
+        """Persist successful execution results atomically via RPC if available, fallback to manual."""
+        try:
+            self.client.rpc(
+                "complete_mtumishi_run",
+                {
+                    "p_run_id": run.id,
+                    "p_worker_id": self.config.worker_id,
+                    "p_status": "completed",
+                    "p_final": units_final,
+                    "p_summary": result.get("summary"),
+                    "p_steps": result.get("steps", []),
+                    "p_qgis_scripts": result.get("qgis_scripts", []),
+                    "p_result": result,
+                },
+            ).execute()
+        except Exception:
+            # Fallback legacy 2-step write if complete_mtumishi_run RPC is not deployed yet
+            payload = {
+                "status": "completed",
+                "summary": result.get("summary"),
+                "steps_json": result.get("steps", []),
+                "qgis_scripts_json": result.get("qgis_scripts", []),
+                "result_json": result,
+                "units_final": units_final,
+                "lease_until": None,
+                "finished_at": utc_now_iso(),
+                "updated_at": utc_now_iso(),
+            }
+            self.client.table("agent_runs").update(payload).eq("id", run.id).execute()
 
-        self.client.rpc(
-            "finalize_mtumishi_units",
-            {
-                "p_user_id": run.user_id,
-                "p_run_id": run.id,
-                "p_reserved": run.units_reserved,
-                "p_final": units_final,
-            },
-        ).execute()
+            self.client.rpc(
+                "finalize_mtumishi_units",
+                {
+                    "p_user_id": run.user_id,
+                    "p_run_id": run.id,
+                    "p_reserved": run.units_reserved,
+                    "p_final": units_final,
+                },
+            ).execute()
 
     def mark_failed(self, run: LeasedRun, error_message: str, details: Optional[Dict[str, Any]] = None) -> None:
         """Persist execution failures."""
