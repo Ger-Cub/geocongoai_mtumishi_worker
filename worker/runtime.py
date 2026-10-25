@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Any, Callable, Dict, Optional
 
 from geocongoai import GeoSpatialContext, Mtumishi
+from geocongoai.mtumishi.runtimes.native import _detect_conversational_intent
 
 from worker.models import LeasedRun, WorkerConfig
 
@@ -25,18 +26,29 @@ def execute_run(
     on_event: Optional[Callable[[Any], None]] = None,
 ) -> Dict[str, Any]:
     """Execute a single Mtumishi job."""
-    runtime_type = run.requested_runtime or config.default_runtime
+    # Priority: if conversational intent (greetings, help, identity, etc.), route to native for instant response (< 50ms)
+    prompt_str = run.prompt or ""
+    is_conversational = False
+    try:
+        is_conversational = bool(_detect_conversational_intent(prompt_str))
+    except Exception:
+        pass
+
+    if is_conversational:
+        runtime_type = "native"
+    else:
+        runtime_type = run.requested_runtime or config.default_runtime
 
     if runtime_type == "native":
         runtime_kwargs = {
             "model_name": run.model_name or config.default_model_name,
         }
     else:
-        # antigravity runtime
+        # antigravity runtime — never provide directory workspaces to prevent dev_list_directory!
         runtime_kwargs = {
             "api_key": config.gemini_api_key,
             "model_name": run.model_name or config.default_model_name,
-            "workspaces": [config.workspaces] if isinstance(config.workspaces, str) else config.workspaces,
+            "workspaces": [],
         }
 
     mtumishi = Mtumishi(
@@ -65,10 +77,16 @@ def execute_run(
             context_override=context_override,
         )
 
+    # Filter out any internal dev/workspace tools
+    cleaned_steps = [
+        st for st in (result.steps or [])
+        if not str(st.get("tool", "")).startswith("dev_")
+    ]
+
     return {
         "status": result.status,
         "summary": result.summary,
-        "steps": result.steps,
+        "steps": cleaned_steps,
         "qgis_scripts": result.qgis_scripts,
         "context": result.context.to_dict() if result.context else None,
         "metadata": {

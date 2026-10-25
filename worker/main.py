@@ -49,6 +49,9 @@ def main() -> None:
 
             if type_val == "tool_call":
                 tool_name = meta.get("tool") or "tool"
+                # Exclude internal dev workspace tools
+                if str(tool_name).startswith("dev_"):
+                    return
                 args = meta.get("args") or {}
                 steps_collector.append({
                     "step": len(steps_collector) + 1,
@@ -60,6 +63,8 @@ def main() -> None:
                 last_update_time[0] = now
             elif type_val == "tool_result":
                 tool_name = meta.get("tool")
+                if str(tool_name).startswith("dev_"):
+                    return
                 res = meta.get("result")
                 status = meta.get("status") or "success"
                 for st in reversed(steps_collector):
