@@ -1,7 +1,7 @@
 """Mtumishi runtime execution for leased jobs."""
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any, Callable, Dict, Optional
 
 from geocongoai import GeoSpatialContext, Mtumishi
 
@@ -19,7 +19,11 @@ def estimate_final_units(run: LeasedRun, result: Dict[str, Any]) -> int:
     return max(1, run.units_reserved)
 
 
-def execute_run(run: LeasedRun, config: WorkerConfig) -> Dict[str, Any]:
+def execute_run(
+    run: LeasedRun,
+    config: WorkerConfig,
+    on_event: Optional[Callable[[Any], None]] = None,
+) -> Dict[str, Any]:
     """Execute a single Mtumishi job."""
     runtime_type = run.requested_runtime or config.default_runtime
 
@@ -41,10 +45,25 @@ def execute_run(run: LeasedRun, config: WorkerConfig) -> Dict[str, Any]:
         runtime_kwargs=runtime_kwargs,
     )
 
-    result = mtumishi.run(
-        prompt=run.prompt,
-        context_override=build_context(run.context_json),
-    )
+    context_override = build_context(run.context_json)
+
+    if on_event and hasattr(mtumishi, "run_with_stream"):
+        try:
+            result = mtumishi.run_with_stream(
+                prompt=run.prompt,
+                on_event=on_event,
+                context_override=context_override,
+            )
+        except Exception:
+            result = mtumishi.run(
+                prompt=run.prompt,
+                context_override=context_override,
+            )
+    else:
+        result = mtumishi.run(
+            prompt=run.prompt,
+            context_override=context_override,
+        )
 
     return {
         "status": result.status,

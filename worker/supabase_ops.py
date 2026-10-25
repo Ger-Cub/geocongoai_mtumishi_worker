@@ -92,6 +92,19 @@ class SupabaseRunStore:
                 },
             ).execute()
 
+    def update_progress(self, run_id: str, steps: list, summary_fragment: Optional[str] = None) -> None:
+        """Update live progress during execution so web clients see real-time steps."""
+        try:
+            payload: Dict[str, Any] = {
+                "steps_json": steps,
+                "updated_at": utc_now_iso(),
+            }
+            if summary_fragment is not None:
+                payload["summary"] = summary_fragment
+            self.client.table("agent_runs").update(payload).eq("id", run_id).execute()
+        except Exception:
+            pass
+
     def mark_failed(self, run: LeasedRun, error_message: str, details: Optional[Dict[str, Any]] = None) -> None:
         """Persist execution failures."""
         payload = {
