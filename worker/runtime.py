@@ -23,14 +23,22 @@ def execute_run(run: LeasedRun, config: WorkerConfig) -> Dict[str, Any]:
     """Execute a single Mtumishi job."""
     runtime_type = run.requested_runtime or config.default_runtime
 
+    if runtime_type == "native":
+        runtime_kwargs = {
+            "model_name": run.model_name or config.default_model_name,
+        }
+    else:
+        # antigravity runtime
+        runtime_kwargs = {
+            "api_key": config.gemini_api_key,
+            "model_name": run.model_name or config.default_model_name,
+            "workspaces": [config.workspaces] if isinstance(config.workspaces, str) else config.workspaces,
+        }
+
     mtumishi = Mtumishi(
         runtime_type=runtime_type,
         qgis_rpc_port=config.qgis_rpc_port,
-        runtime_kwargs={
-            "api_key": config.gemini_api_key,
-            "model_name": run.model_name or config.default_model_name,
-            "workspaces": config.workspaces,
-        },
+        runtime_kwargs=runtime_kwargs,
     )
 
     result = mtumishi.run(
