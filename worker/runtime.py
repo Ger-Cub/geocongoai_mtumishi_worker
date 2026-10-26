@@ -193,12 +193,26 @@ def execute_run(
 
         # 2. Gundua deterministic analysis
         elif tool_name == "gundua_analyse_deterministe":
-            if res.get("geojson"):
+            if res.get("geojson") and isinstance(res["geojson"], dict) and res["geojson"].get("type") in ("FeatureCollection", "Feature"):
                 geojson_payload = res["geojson"]
             elif res.get("geojson_url"):
-                geojson_payload = {"geojson_url": res["geojson_url"]}
+                raw_url = str(res["geojson_url"])
+                full_url = raw_url if raw_url.startswith("http") else f"https://geocongo-solafune-greenfield-api.geocongoai.com/{raw_url.lstrip('/')}"
+                # Download and inline GeoJSON directly for the web client
+                try:
+                    import requests
+                    r = requests.get(full_url, timeout=6)
+                    if r.ok:
+                        geojson_payload = r.json()
+                    else:
+                        geojson_payload = {"geojson_url": full_url}
+                except Exception:
+                    geojson_payload = {"geojson_url": full_url}
 
             url = res.get("satellite_preview_url") or res.get("raster_url")
+            if url and not str(url).startswith("http"):
+                url = f"https://geocongo-solafune-greenfield-api.geocongoai.com/{str(url).lstrip('/')}"
+
             gundua_bbox = res.get("bbox") or bbox
             if url and gundua_bbox and len(gundua_bbox) == 4:
                 raster_overlay_payload = {
