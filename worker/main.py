@@ -9,6 +9,7 @@ from typing import Any
 from worker.config import load_config
 from worker.runtime import estimate_final_units, execute_run
 from worker.supabase_ops import SupabaseRunStore
+from worker.realtime import MtumishiRealtimePublisher
 
 
 def configure_logging() -> None:
@@ -26,6 +27,7 @@ def main() -> None:
 
     config = load_config()
     store = SupabaseRunStore(config)
+    realtime = MtumishiRealtimePublisher(store.client)
 
     logger.info("Worker started with id=%s", config.worker_id)
 
@@ -36,6 +38,7 @@ def main() -> None:
             continue
 
         logger.info("Leased run id=%s user_id=%s runtime=%s", run.id, run.user_id, run.requested_runtime)
+        realtime.emit(run.id, "run_started", {"worker_id": config.worker_id, "runtime": run.requested_runtime, "model_name": run.model_name})
 
         steps_collector: list = []
         text_chunks: list = []
@@ -60,6 +63,7 @@ def main() -> None:
                     "status": "running",
                 })
                 store.update_progress(run.id, steps_collector)
+                realtime.emit(run.id, "tool_started", {"tool": tool_name, "args": args}, event_name=tool_name)
                 last_update_time[0] = now
             elif type_val == "tool_result":
                 tool_name = meta.get("tool")
@@ -73,6 +77,7 @@ def main() -> None:
                         st["result"] = res
                         break
                 store.update_progress(run.id, steps_collector)
+                realtime.emit(run.id, "tool_completed", {"tool": tool_name, "status": status, "result": res}, event_name=tool_name)
                 last_update_time[0] = now
             elif type_val == "text":
                 content = getattr(ev, "content", "")
@@ -85,10 +90,36 @@ def main() -> None:
         try:
             result = execute_run(run, config, on_event=_on_event)
             units_final = estimate_final_units(run, result)
+
+            if result.get("geojson"):
+                realtime.emit_geojson_layer(
+                    run.id,
+                    f"geojson-{run.id}",
+                    result["geojson"],
+                    "Calque Mtumishi",
+                    opacity=0.85,
+                )
+
+            if result.get("raster_overlay"):
+                realtime.emit_raster_layer(
+                    run.id,
+                    f"raster-{run.id}",
+                    {
+                        "image_url": result["raster_overlay"].get("url"),
+                        "bounds": result["raster_overlay"].get("bounds"),
+                        "name": result["raster_overlay"].get("name"),
+                        "opacity": result["raster_overlay"].get("opacity", 0.85),
+                    },
+                    result["raster_overlay"].get("name", "Couche raster Mtumishi"),
+                    opacity=result["raster_overlay"].get("opacity", 0.85),
+                )
+
+            realtime.emit(run.id, "run_completed", {"status": "completed", "units_final": units_final, "summary": result.get("summary")}, event_name="run_completed")
             store.mark_completed(run, result, units_final)
             logger.info("Completed run id=%s units_final=%s", run.id, units_final)
         except Exception as exc:
             logger.exception("Run failed id=%s", run.id)
+            realtime.emit(run.id, "run_failed", {"error": str(exc), "traceback": traceback.format_exc()}, event_name="run_failed")
             store.mark_failed(
                 run,
                 error_message=str(exc),
