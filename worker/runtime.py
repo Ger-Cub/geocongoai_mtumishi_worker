@@ -4,14 +4,24 @@ from __future__ import annotations
 from typing import Any, Callable, Dict, Optional
 
 from geocongoai import GeoSpatialContext, Mtumishi
-from geocongoai.mtumishi.runtimes.native import _detect_conversational_intent
+try:
+    from geocongoai.mtumishi.runtimes.native import _detect_conversational_intent
+except ImportError:
+    # This SDK helper is private. Its absence must not stop the worker.
+    _detect_conversational_intent = lambda _prompt: False
 
 from worker.models import LeasedRun, WorkerConfig
 
 
 def build_context(raw_context: Dict[str, Any]) -> GeoSpatialContext:
     """Build a `GeoSpatialContext` from the job payload."""
-    return GeoSpatialContext.from_dict(raw_context or {})
+    payload = dict(raw_context or {})
+    metadata = dict(payload.get("metadata") or {})
+    for key in ("environment", "client", "geometry", "area_km2", "points_count"):
+        if key in payload:
+            metadata[key] = payload[key]
+    payload["metadata"] = metadata
+    return GeoSpatialContext.from_dict(payload)
 
 
 def estimate_final_units(run: LeasedRun, result: Dict[str, Any]) -> int:
@@ -82,22 +92,14 @@ def execute_run(
         )
 
     if on_event and hasattr(mtumishi, "run_with_stream"):
-        try:
-            result = mtumishi.run_with_stream(
-                prompt=execution_prompt,
-                on_event=on_event,
-                context_override=context_override,
-            )
-        except Exception:
-            result = mtumishi.run(
-                prompt=execution_prompt,
-                context_override=context_override,
-            )
-    else:
-        result = mtumishi.run(
+        # Never rerun the analysis after a streaming error: tools may already have executed.
+        result = mtumishi.run_with_stream(
             prompt=execution_prompt,
+            on_event=on_event,
             context_override=context_override,
         )
+    else:
+        result = mtumishi.run(prompt=execution_prompt, context_override=context_override)
 
     # Filter out any internal dev/workspace or QGIS tools from displayed steps
     cleaned_steps = [
@@ -112,169 +114,22 @@ def execute_run(
             and not (is_web and str(st.get("tool", "")).startswith("qgis_"))
         ]
 
-    # Automatically extract geospatial deliverables (GeoJSON and Raster Overlay)
-    geojson_payload: Optional[Dict[str, Any]] = None
-    raster_overlay_payload: Optional[Dict[str, Any]] = None
+    # Keep every actual tool result in steps. The API adapts them to the web contract.
+    # A STAC scene preview must not be stretched over the AOI or turned into a synthetic result.
+    geojson_payload = getattr(result, "geojson", None)
+    raster_overlay_payload = getattr(result, "raster_overlay", None)
+    deliverables = getattr(result, "deliverables", None)
+    if not isinstance(deliverables, (dict, list)):
+        deliverables = {}
 
-    bbox = context_override.bbox
-    for st in cleaned_steps:
-        tool_name = st.get("tool", "")
-        res = st.get("result", {})
-        if not isinstance(res, dict):
-            continue
-
-        # 1. STAC satellite imagery tools (stac_calc_indices, stac_search_scenes)
-        if tool_name in ("stac_calc_indices", "stac_search_scenes"):
-            step_bbox = res.get("bbox") or bbox
-            scene_id = res.get("scene_id") or (res.get("best_scene") or {}).get("id")
-            indices = res.get("indices", {})
-
-            if step_bbox and len(step_bbox) == 4:
-                min_lon, min_lat, max_lon, max_lat = (
-                    float(step_bbox[0]),
-                    float(step_bbox[1]),
-                    float(step_bbox[2]),
-                    float(step_bbox[3]),
-                )
-
-                preview_url = None
-                overlay_name = "Imagerie Satellitaire Sentinel-2"
-
-                if scene_id:
-                    # Index mapping for Planetary Computer COG previews with geological colormaps & rescales
-                    idx_upper = {k.upper(): v for k, v in indices.items()}
-
-                    if "CLAY_OH" in idx_upper or "CLAY" in idx_upper:
-                        preview_url = (
-                            f"https://planetarycomputer.microsoft.com/api/data/v1/item/preview.png?"
-                            f"collection=sentinel-2-l2a&item={scene_id}&expression=B11/B12&asset_as_band=True&colormap_name=magma&rescale=1.0,2.4"
-                        )
-                        overlay_name = f"Argiles & Altération Al-OH ({scene_id[:16]}...)"
-                    elif "IRON_OXIDE" in idx_upper or "FERRIC" in idx_upper:
-                        preview_url = (
-                            f"https://planetarycomputer.microsoft.com/api/data/v1/item/preview.png?"
-                            f"collection=sentinel-2-l2a&item={scene_id}&expression=B04/B02&asset_as_band=True&colormap_name=inferno&rescale=1.1,2.8"
-                        )
-                        overlay_name = f"Oxydes de Fer Fe3+ ({scene_id[:16]}...)"
-                    elif "FERROUS" in idx_upper or "FERROUS_IRON" in idx_upper:
-                        preview_url = (
-                            f"https://planetarycomputer.microsoft.com/api/data/v1/item/preview.png?"
-                            f"collection=sentinel-2-l2a&item={scene_id}&expression=B12/B8A&asset_as_band=True&colormap_name=spectral&rescale=0.7,2.2"
-                        )
-                        overlay_name = f"Minéraux Ferreux Fe2+ ({scene_id[:16]}...)"
-                    elif "CARBONATE_DOLOMITE" in idx_upper or "CARBONATE" in idx_upper:
-                        preview_url = (
-                            f"https://planetarycomputer.microsoft.com/api/data/v1/item/preview.png?"
-                            f"collection=sentinel-2-l2a&item={scene_id}&expression=(B08%2BB12)/B11&asset_as_band=True&colormap_name=plasma&rescale=1.0,2.5"
-                        )
-                        overlay_name = f"Carbonates & Dolomie ({scene_id[:16]}...)"
-                    elif "GOSSAN" in idx_upper:
-                        preview_url = (
-                            f"https://planetarycomputer.microsoft.com/api/data/v1/item/preview.png?"
-                            f"collection=sentinel-2-l2a&item={scene_id}&expression=(B04/B03)*(B11/B08)&asset_as_band=True&colormap_name=inferno&rescale=0.8,3.2"
-                        )
-                        overlay_name = f"Chapeau de Fer Gossan ({scene_id[:16]}...)"
-                    elif "BSI" in idx_upper:
-                        preview_url = (
-                            f"https://planetarycomputer.microsoft.com/api/data/v1/item/preview.png?"
-                            f"collection=sentinel-2-l2a&item={scene_id}&expression=((B11%2BB04)-(B08%2BB02))/((B11%2BB04)%2B(B08%2BB02))&asset_as_band=True&colormap_name=cividis&rescale=-0.2,0.55"
-                        )
-                        overlay_name = f"Sol Nu & Affleurements BSI ({scene_id[:16]}...)"
-                    elif "RGB_MINERAL" in idx_upper:
-                        preview_url = (
-                            f"https://planetarycomputer.microsoft.com/api/data/v1/item/preview.png?"
-                            f"collection=sentinel-2-l2a&item={scene_id}&assets=B12&assets=B11&assets=B04&color_formula=gamma+rgb+1.8+saturation+1.4"
-                        )
-                        overlay_name = f"Composite RGB Géologique ({scene_id[:16]}...)"
-                    elif "NDVI" in idx_upper:
-                        preview_url = (
-                            f"https://planetarycomputer.microsoft.com/api/data/v1/item/preview.png?"
-                            f"collection=sentinel-2-l2a&item={scene_id}&expression=(B08-B04)/(B08%2BB04)&asset_as_band=True&colormap_name=viridis&rescale=-0.2,0.8"
-                        )
-                        overlay_name = f"NDVI Sentinel-2 ({scene_id[:16]}...)"
-                    else:
-                        # True color preview (B04, B03, B02)
-                        preview_url = (
-                            f"https://planetarycomputer.microsoft.com/api/data/v1/item/preview.png?"
-                            f"collection=sentinel-2-l2a&item={scene_id}&assets=B04&assets=B03&assets=B02&color_formula=gamma+rgb+2.2+saturation+1.2"
-                        )
-                        overlay_name = f"Sentinel-2 Vraies Couleurs ({scene_id[:16]}...)"
-
-                if preview_url:
-                    raster_overlay_payload = {
-                        "url": preview_url,
-                        # Leaflet bounds: [[South, West], [North, East]]
-                        "bounds": [[min_lat, min_lon], [max_lat, max_lon]],
-                        "name": overlay_name,
-                        "scene_id": scene_id,
-                        "opacity": 0.85,
-                    }
-
-                # Build GeoJSON feature representing the analyzed polygon
-                geojson_payload = {
-                    "type": "FeatureCollection",
-                    "features": [
-                        {
-                            "type": "Feature",
-                            "geometry": {
-                                "type": "Polygon",
-                                "coordinates": [[
-                                    [min_lon, min_lat],
-                                    [max_lon, min_lat],
-                                    [max_lon, max_lat],
-                                    [min_lon, max_lat],
-                                    [min_lon, min_lat],
-                                ]],
-                            },
-                            "properties": {
-                                "title": overlay_name,
-                                "scene_id": scene_id,
-                                "date": res.get("scene_date"),
-                                "cloud_cover": res.get("cloud_cover"),
-                                "indices": {
-                                    k: v.get("stats")
-                                    for k, v in indices.items()
-                                    if isinstance(v, dict) and "stats" in v
-                                },
-                                "raster_url": preview_url,
-                            },
-                        }
-                    ],
-                }
-
-        # 2. Gundua deterministic analysis
-        elif tool_name == "gundua_analyse_deterministe":
-            if res.get("geojson") and isinstance(res["geojson"], dict) and res["geojson"].get("type") in ("FeatureCollection", "Feature"):
-                geojson_payload = res["geojson"]
-            elif res.get("geojson_url"):
-                raw_url = str(res["geojson_url"])
-                full_url = raw_url if raw_url.startswith("http") else f"https://geocongo-solafune-greenfield-api.geocongoai.com/{raw_url.lstrip('/')}"
-                # Download and inline GeoJSON directly for the web client
-                try:
-                    import requests
-                    r = requests.get(full_url, timeout=6)
-                    if r.ok:
-                        geojson_payload = r.json()
-                    else:
-                        geojson_payload = {"geojson_url": full_url}
-                except Exception:
-                    geojson_payload = {"geojson_url": full_url}
-
-            url = res.get("satellite_preview_url") or res.get("raster_url")
-            if url and not str(url).startswith("http"):
-                url = f"https://geocongo-solafune-greenfield-api.geocongoai.com/{str(url).lstrip('/')}"
-
-            gundua_bbox = res.get("bbox") or bbox
-            if url and gundua_bbox and len(gundua_bbox) == 4:
-                raster_overlay_payload = {
-                    "url": url,
-                    "bounds": [[float(gundua_bbox[1]), float(gundua_bbox[0])], [float(gundua_bbox[3]), float(gundua_bbox[2])]],
-                    "name": "Analyse Gundua",
-                    "opacity": 0.85,
-                }
-
+    sdk_status = getattr(result.status, "value", result.status)
+    failed_steps = [step for step in cleaned_steps if step.get("status") in ("error", "failed")
+                    or isinstance(step.get("result"), dict) and step["result"].get("error")]
+    status = "completed" if sdk_status in ("success", "completed") and not failed_steps else "failed"
     return {
-        "status": result.status,
+        "status": status,
+        "sdk_status": sdk_status,
+        "deliverables": deliverables,
         "summary": result.summary,
         "steps": cleaned_steps,
         "qgis_scripts": [] if is_web else result.qgis_scripts,
