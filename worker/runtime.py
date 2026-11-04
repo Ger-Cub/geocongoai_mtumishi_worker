@@ -30,6 +30,51 @@ def estimate_final_units(run: LeasedRun, result: Dict[str, Any]) -> int:
     return max(1, run.units_reserved)
 
 
+def collect_execution_steps(result_steps, memory_steps, event_steps, is_web):
+    """Recover executed tool outputs even when Antigravity omits ToolResult chunks.
+
+    GeoTool writes actual results to MtumishiMemory before returning to the model.
+    Events and MtumishiResult may only contain starts on SDK 0.4.5. Merge by
+    occurrence per tool, preserving repeated invocations and actual failures.
+    """
+    sources = []
+    recorded = []
+    if isinstance(memory_steps, (list, tuple)):
+        for step in memory_steps:
+            if isinstance(step, dict):
+                recorded.append(dict(step))
+            else:
+                recorded.append({
+                    "tool": step.tool_name, "args": step.arguments,
+                    "result": step.result, "status": step.status,
+                })
+    sources.append(recorded)
+    sources.append(result_steps if isinstance(result_steps, (list, tuple)) else [])
+    sources.append(event_steps if isinstance(event_steps, (list, tuple)) else [])
+    merged = []
+    by_tool = {}
+    for source in sources:
+        seen = {}
+        for step in source:
+            if not isinstance(step, dict):
+                continue
+            name = str(step.get("tool") or "")
+            if not name or name.startswith("dev_") or (is_web and name.startswith("qgis_")):
+                continue
+            occurrence = seen.get(name, 0)
+            seen[name] = occurrence + 1
+            previous = by_tool.setdefault(name, [])
+            if occurrence < len(previous):
+                existing = previous[occurrence]
+                if existing.get("status") in (None, "running", "queued") and step.get("status") not in (None, "running", "queued"):
+                    existing.update(step)
+                continue
+            copy = dict(step)
+            merged.append(copy)
+            previous.append(copy)
+    return merged
+
+
 def execute_run(
     run: LeasedRun,
     config: WorkerConfig,
@@ -101,18 +146,12 @@ def execute_run(
     else:
         result = mtumishi.run(prompt=execution_prompt, context_override=context_override)
 
-    # Filter out any internal dev/workspace or QGIS tools from displayed steps
-    cleaned_steps = [
-        st for st in (result.steps or [])
-        if not str(st.get("tool", "")).startswith("dev_")
-        and not (is_web and str(st.get("tool", "")).startswith("qgis_"))
-    ]
-    if not cleaned_steps and steps_collector:
-        cleaned_steps = [
-            st for st in steps_collector
-            if not str(st.get("tool", "")).startswith("dev_")
-            and not (is_web and str(st.get("tool", "")).startswith("qgis_"))
-        ]
+    cleaned_steps = collect_execution_steps(
+        result.steps,
+        getattr(getattr(mtumishi, "memory", None), "steps", None),
+        steps_collector,
+        is_web,
+    )
 
     # Keep every actual tool result in steps. The API adapts them to the web contract.
     # A STAC scene preview must not be stretched over the AOI or turned into a synthetic result.
@@ -123,14 +162,15 @@ def execute_run(
         deliverables = {}
 
     sdk_status = getattr(result.status, "value", result.status)
-    failed_steps = [step for step in cleaned_steps if step.get("status") in ("error", "failed")
+    failed_steps = [step for step in cleaned_steps if step.get("status") in ("error", "failed", "running", "queued")
                     or isinstance(step.get("result"), dict) and step["result"].get("error")]
     status = "completed" if sdk_status in ("success", "completed") and not failed_steps else "failed"
     return {
         "status": status,
         "sdk_status": sdk_status,
         "deliverables": deliverables,
-        "summary": result.summary,
+        "summary": result.summary if not any(step.get("status") in ("running", "queued") for step in cleaned_steps)
+            else result.summary + "\n\nCertains résultats d’outils n’ont pas pu être récupérés ; l’exécution ne peut pas être déclarée terminée.",
         "steps": cleaned_steps,
         "qgis_scripts": [] if is_web else result.qgis_scripts,
         "geojson": geojson_payload,
