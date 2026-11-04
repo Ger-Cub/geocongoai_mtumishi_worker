@@ -11,4 +11,6 @@ RUN pip install --no-cache-dir --upgrade pip && \
 
 COPY worker ./worker
 
+EXPOSE 8000
+
 CMD ["python", "-m", "worker.main"]
