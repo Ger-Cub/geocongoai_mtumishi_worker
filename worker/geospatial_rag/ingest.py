@@ -111,7 +111,9 @@ def ingest_congo_basin_tiles(
             embedding_4096 = embedder.embed_image(img_bytes)
 
             bbox_coords = assets_info["bbox"]
+            min_x, min_y, max_x, max_y = bbox_coords
             polygon_geojson = format_geojson_polygon(bbox_coords)
+            polygon_wkt = f"SRID=4326;POLYGON(({min_x} {min_y}, {max_x} {min_y}, {max_x} {max_y}, {min_x} {max_y}, {min_x} {min_y}))"
 
             metadata = {
                 "stac_item_id": item_id,
@@ -138,6 +140,7 @@ def ingest_congo_basin_tiles(
             record = {
                 "stac_item_id": item_id,
                 "embedding": embedding_4096,
+                "bbox": polygon_wkt,
                 "geojson": polygon_geojson,
                 "metadata": metadata,
             }
