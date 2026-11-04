@@ -134,20 +134,64 @@ def execute_run(
                 overlay_name = "Imagerie Satellitaire Sentinel-2"
 
                 if scene_id:
-                    # If NDVI was computed, generate Planetary Computer viridis colorized NDVI preview
-                    if "NDVI" in indices:
+                    # Index mapping for Planetary Computer COG previews with geological colormaps & rescales
+                    idx_upper = {k.upper(): v for k, v in indices.items()}
+
+                    if "CLAY_OH" in idx_upper or "CLAY" in idx_upper:
+                        preview_url = (
+                            f"https://planetarycomputer.microsoft.com/api/data/v1/item/preview.png?"
+                            f"collection=sentinel-2-l2a&item={scene_id}&expression=B11/B12&colormap_name=magma&rescale=1.0,2.4"
+                        )
+                        overlay_name = f"Argiles & Altération Al-OH ({scene_id[:16]}...)"
+                    elif "IRON_OXIDE" in idx_upper or "FERRIC" in idx_upper:
+                        preview_url = (
+                            f"https://planetarycomputer.microsoft.com/api/data/v1/item/preview.png?"
+                            f"collection=sentinel-2-l2a&item={scene_id}&expression=B04/B02&colormap_name=inferno&rescale=1.1,2.8"
+                        )
+                        overlay_name = f"Oxydes de Fer Fe3+ ({scene_id[:16]}...)"
+                    elif "FERROUS" in idx_upper or "FERROUS_IRON" in idx_upper:
+                        preview_url = (
+                            f"https://planetarycomputer.microsoft.com/api/data/v1/item/preview.png?"
+                            f"collection=sentinel-2-l2a&item={scene_id}&expression=B12/B8A&colormap_name=spectral&rescale=0.7,2.2"
+                        )
+                        overlay_name = f"Minéraux Ferreux Fe2+ ({scene_id[:16]}...)"
+                    elif "CARBONATE_DOLOMITE" in idx_upper or "CARBONATE" in idx_upper:
+                        preview_url = (
+                            f"https://planetarycomputer.microsoft.com/api/data/v1/item/preview.png?"
+                            f"collection=sentinel-2-l2a&item={scene_id}&expression=(B08%2BB12)/B11&colormap_name=plasma&rescale=1.0,2.5"
+                        )
+                        overlay_name = f"Carbonates & Dolomie ({scene_id[:16]}...)"
+                    elif "GOSSAN" in idx_upper:
+                        preview_url = (
+                            f"https://planetarycomputer.microsoft.com/api/data/v1/item/preview.png?"
+                            f"collection=sentinel-2-l2a&item={scene_id}&expression=(B04/B03)*(B11/B08)&colormap_name=inferno&rescale=0.8,3.2"
+                        )
+                        overlay_name = f"Chapeau de Fer Gossan ({scene_id[:16]}...)"
+                    elif "BSI" in idx_upper:
+                        preview_url = (
+                            f"https://planetarycomputer.microsoft.com/api/data/v1/item/preview.png?"
+                            f"collection=sentinel-2-l2a&item={scene_id}&expression=((B11%2BB04)-(B08%2BB02))/((B11%2BB04)%2B(B08%2BB02))&colormap_name=cividis&rescale=-0.2,0.55"
+                        )
+                        overlay_name = f"Sol Nu & Affleurements BSI ({scene_id[:16]}...)"
+                    elif "RGB_MINERAL" in idx_upper:
+                        preview_url = (
+                            f"https://planetarycomputer.microsoft.com/api/data/v1/item/preview.png?"
+                            f"collection=sentinel-2-l2a&item={scene_id}&assets=B12&assets=B11&assets=B04&color_formula=gamma+rgb+1.8+saturation+1.4"
+                        )
+                        overlay_name = f"Composite RGB Géologique ({scene_id[:16]}...)"
+                    elif "NDVI" in idx_upper:
                         preview_url = (
                             f"https://planetarycomputer.microsoft.com/api/data/v1/item/preview.png?"
                             f"collection=sentinel-2-l2a&item={scene_id}&expression=(B08-B04)/(B08%2BB04)&colormap_name=viridis&rescale=-0.2,0.8"
                         )
-                        overlay_name = f"NDVI Sentinel-2 ({scene_id[:20]}...)"
+                        overlay_name = f"NDVI Sentinel-2 ({scene_id[:16]}...)"
                     else:
                         # True color preview (B04, B03, B02)
                         preview_url = (
                             f"https://planetarycomputer.microsoft.com/api/data/v1/item/preview.png?"
                             f"collection=sentinel-2-l2a&item={scene_id}&assets=B04&assets=B03&assets=B02&color_formula=gamma+rgb+2.2+saturation+1.2"
                         )
-                        overlay_name = f"Sentinel-2 ({scene_id[:20]}...)"
+                        overlay_name = f"Sentinel-2 Vraies Couleurs ({scene_id[:16]}...)"
 
                 if preview_url:
                     raster_overlay_payload = {
