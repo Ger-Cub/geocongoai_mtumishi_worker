@@ -1,0 +1,13 @@
+[Unit]
+Description=GeoCongoAI Geospatial RAG Tile Ingestion Service
+After=network.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/geocongoai-mtumishi-worker
+EnvironmentFile=/opt/geocongoai-mtumishi-worker/.env
+ExecStart=/opt/geocongoai-mtumishi-worker/.venv/bin/python -m worker.geospatial_rag.ingest --limit 5 --max-clouds 15.0 --region all
+User=geocongoai
+Group=geocongoai
+StandardOutput=journal
+StandardError=journal

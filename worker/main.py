@@ -45,6 +45,12 @@ def main() -> None:
         http_thread = threading.Thread(target=_run_server, daemon=True)
         http_thread.start()
 
+    # Démarrage de l'ingestion automatique périodique du RAG géospatial (Sentinel-2 Congo Basin)
+    auto_ingest_enabled = os.getenv("GEOSPATIAL_AUTO_INGEST_ENABLED", "1").lower() in ("1", "true", "yes")
+    if auto_ingest_enabled:
+        from worker.geospatial_rag.scheduler import start_auto_ingest_scheduler
+        start_auto_ingest_scheduler()
+
     while True:
         try:
             run = store.lease_next_run()

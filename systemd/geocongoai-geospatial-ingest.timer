@@ -1,0 +1,10 @@
+[Unit]
+Description=Run GeoCongoAI Geospatial RAG Tile Ingestion Every 6 Hours
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=6h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

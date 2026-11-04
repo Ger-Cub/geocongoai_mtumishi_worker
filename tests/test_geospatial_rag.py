@@ -1,4 +1,4 @@
-"""Unit and integration tests for Geospatial & Multimodal RAG."""
+"""Unit and integration tests for Geospatial & Multimodal RAG and Automated Ingestion."""
 from __future__ import annotations
 
 import io
@@ -20,7 +20,11 @@ from worker.geospatial_rag.image_processor import (
     normalize_band,
     process_user_uploaded_image,
 )
-from worker.geospatial_rag.stac_client import CONGO_BASIN_BBOX
+from worker.geospatial_rag.stac_client import (
+    CONGO_BASIN_BBOX,
+    GEOLOGICAL_REGIONS,
+    get_region_details,
+)
 
 
 class TestGeospatialRAG(unittest.TestCase):
@@ -76,9 +80,35 @@ class TestGeospatialRAG(unittest.TestCase):
         min_x, min_y, max_x, max_y = CONGO_BASIN_BBOX
         self.assertLess(min_x, max_x)
         self.assertLess(min_y, max_y)
-        # DRC covers equator from ~ -13.5 to +5.5 lat
         self.assertLess(min_y, 0.0)
         self.assertGreater(max_y, 0.0)
+
+    def test_geological_regions_integrity(self):
+        """Verify all geological regions have valid coordinates and metadata."""
+        self.assertIn("katanga_copperbelt", GEOLOGICAL_REGIONS)
+        self.assertIn("kivu_maniema", GEOLOGICAL_REGIONS)
+        self.assertIn("virunga_volcanoes", GEOLOGICAL_REGIONS)
+        self.assertIn("kasai_craton", GEOLOGICAL_REGIONS)
+
+        for key, info in GEOLOGICAL_REGIONS.items():
+            bbox = info["bbox"]
+            self.assertEqual(len(bbox), 4, f"Bbox for {key} must have 4 coords")
+            min_x, min_y, max_x, max_y = bbox
+            self.assertLess(min_x, max_x, f"Min lon < max lon for {key}")
+            self.assertLess(min_y, max_y, f"Min lat < max lat for {key}")
+            self.assertTrue(len(info["name"]) > 0)
+            self.assertTrue(len(info["targets"]) > 0)
+
+    def test_get_region_details(self):
+        """Test resolution of region keys and fallback behavior."""
+        key, bbox, info = get_region_details("katanga_copperbelt")
+        self.assertEqual(key, "katanga_copperbelt")
+        self.assertEqual(bbox, [25.0, -12.0, 28.5, -9.5])
+
+        # Test fallback
+        fb_key, fb_bbox, _ = get_region_details("unknown_zone_xyz")
+        self.assertEqual(fb_key, "congo_basin")
+        self.assertEqual(fb_bbox, CONGO_BASIN_BBOX)
 
     @patch("worker.geospatial_rag.router._get_supabase_client")
     def test_text_search_endpoint(self, mock_get_supabase):
@@ -138,7 +168,57 @@ class TestGeospatialRAG(unittest.TestCase):
         self.assertEqual(data.get("query_type"), "image")
         self.assertEqual(len(data.get("results")), 1)
 
+    def test_ingest_regions_endpoint(self):
+        """Test GET /api/v1/geospatial-search/ingest/regions returns all supported regions."""
+        resp = self.client.get("/api/v1/geospatial-search/ingest/regions")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertGreaterEqual(data.get("count"), 7)
+        self.assertIn("katanga_copperbelt", data.get("regions", {}))
+        self.assertIn("virunga_volcanoes", data.get("regions", {}))
+
+    @patch("worker.geospatial_rag.scheduler.GeospatialAutoIngestScheduler.get_total_tiles_in_db")
+    def test_ingest_status_endpoint(self, mock_get_total):
+        """Test GET /api/v1/geospatial-search/ingest/status returns scheduler telemetry."""
+        mock_get_total.return_value = 42
+        resp = self.client.get("/api/v1/geospatial-search/ingest/status")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertIn("enabled", data)
+        self.assertIn("configuration", data)
+        self.assertIn("next_scheduled_region", data)
+        self.assertEqual(data.get("total_tiles_in_db"), 42)
+
+    @patch("worker.geospatial_rag.scheduler.GeospatialAutoIngestScheduler.trigger_now")
+    def test_ingest_trigger_endpoint(self, mock_trigger):
+        """Test POST /api/v1/geospatial-search/ingest/trigger."""
+        mock_trigger.return_value = {
+            "status": "started",
+            "message": "Immediate ingestion launched",
+            "target_region": "katanga_copperbelt",
+            "batch_size": 3,
+        }
+        resp = self.client.post(
+            "/api/v1/geospatial-search/ingest/trigger",
+            json={"limit": 3, "max_clouds": 10.0, "region": "katanga_copperbelt", "dry_run": True},
+        )
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data.get("status"), "started")
+        mock_trigger.assert_called_once_with(limit=3, max_clouds=10.0, region="katanga_copperbelt", dry_run=True)
+
+    @patch("worker.geospatial_rag.scheduler.GeospatialAutoIngestScheduler.stop")
+    def test_ingest_toggle_endpoint(self, mock_stop):
+        """Test POST /api/v1/geospatial-search/ingest/toggle to pause/resume scheduler."""
+        resp = self.client.post(
+            "/api/v1/geospatial-search/ingest/toggle",
+            json={"enabled": False},
+        )
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertFalse(data.get("enabled"))
+        mock_stop.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()
-

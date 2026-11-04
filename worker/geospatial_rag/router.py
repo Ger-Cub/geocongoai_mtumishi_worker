@@ -1,4 +1,4 @@
-"""FastAPI router for Geospatial & Multimodal RAG search endpoints."""
+"""FastAPI router for Geospatial & Multimodal RAG search and automated ingestion endpoints."""
 from __future__ import annotations
 
 import logging
@@ -16,6 +16,7 @@ from worker.geospatial_rag.image_processor import (
     process_user_uploaded_image,
 )
 from worker.geospatial_rag.stac_client import (
+    GEOLOGICAL_REGIONS,
     extract_tile_assets,
     search_congo_basin_tiles,
 )
@@ -37,6 +38,17 @@ class BboxSearchRequest(BaseModel):
     match_count: int = Field(default=10, ge=1, le=50)
     match_threshold: float = Field(default=0.0, ge=0.0, le=1.0)
     filter_metadata: Optional[Dict[str, Any]] = Field(default=None)
+
+
+class IngestTriggerRequest(BaseModel):
+    limit: int = Field(default=5, ge=1, le=50, description="Target number of new tiles to index")
+    max_clouds: float = Field(default=15.0, ge=0.0, le=100.0, description="Max cloud cover percentage")
+    region: Optional[str] = Field(default=None, description="Geological region key (e.g. katanga_copperbelt) or 'all'")
+    dry_run: bool = Field(default=False, description="Simulate without writing to Supabase")
+
+
+class SchedulerToggleRequest(BaseModel):
+    enabled: bool = Field(..., description="Whether the background auto-ingestion scheduler is enabled")
 
 
 def _get_supabase_client():
@@ -143,7 +155,6 @@ def search_by_bbox(request: BboxSearchRequest) -> Dict[str, Any]:
     supabase = _get_supabase_client()
 
     try:
-        # 1. Récupérer dalle Sentinel-2 correspondante via STAC à la volée
         items = search_congo_basin_tiles(
             bbox=bbox,
             max_cloud_cover=20.0,
@@ -169,7 +180,6 @@ def search_by_bbox(request: BboxSearchRequest) -> Dict[str, Any]:
                 detail="STAC tile found but missing required SWIR/NIR/Red spectral bands.",
             )
 
-        # 2. Prétraitement 3 canaux (SWIR/NIR/Rouge) à la volée
         composite_img, cloud_fraction = build_swir_nir_red_composite(
             swir_url=swir_url,
             nir_url=nir_url,
@@ -178,10 +188,8 @@ def search_by_bbox(request: BboxSearchRequest) -> Dict[str, Any]:
         )
         img_bytes = image_to_jpeg_bytes(composite_img)
 
-        # 3. Génération d'embedding 4096d
         query_embedding_4096 = embedder.embed_image(img_bytes)
 
-        # 4. Requête de similarité vectorielle
         rpc_params = {
             "query_embedding": query_embedding_4096,
             "match_threshold": request.match_threshold,
@@ -206,3 +214,53 @@ def search_by_bbox(request: BboxSearchRequest) -> Dict[str, Any]:
         logger.exception("Bbox search failed: %s", exc)
         raise HTTPException(status_code=500, detail=f"Bbox search failed: {exc}")
 
+
+# --- Ingestion & Automation Endpoints ---
+
+@router.get("/ingest/status")
+def get_ingest_status() -> Dict[str, Any]:
+    """Get status of the automated background ingestion scheduler and indexed tiles."""
+    from worker.geospatial_rag.scheduler import get_scheduler
+    return get_scheduler().get_status()
+
+
+@router.get("/ingest/regions")
+def get_supported_regions() -> Dict[str, Any]:
+    """List all supported geological exploration regions with bounding boxes and targets."""
+    return {
+        "count": len(GEOLOGICAL_REGIONS),
+        "regions": GEOLOGICAL_REGIONS,
+    }
+
+
+@router.post("/ingest/trigger")
+def trigger_ingest(request: IngestTriggerRequest) -> Dict[str, Any]:
+    """Trigger an on-demand background ingestion cycle."""
+    from worker.geospatial_rag.scheduler import get_scheduler
+    scheduler = get_scheduler()
+    return scheduler.trigger_now(
+        limit=request.limit,
+        max_clouds=request.max_clouds,
+        region=request.region,
+        dry_run=request.dry_run,
+    )
+
+
+@router.post("/ingest/toggle")
+def toggle_scheduler(request: SchedulerToggleRequest) -> Dict[str, Any]:
+    """Dynamically enable or disable the background auto-ingestion scheduler."""
+    from worker.geospatial_rag.scheduler import get_scheduler
+    scheduler = get_scheduler()
+    if request.enabled:
+        scheduler.enabled = True
+        scheduler.start()
+        status_msg = "Scheduler enabled and started."
+    else:
+        scheduler.enabled = False
+        scheduler.stop()
+        status_msg = "Scheduler stopped and disabled."
+    return {
+        "enabled": scheduler.enabled,
+        "is_running": bool(scheduler._thread and scheduler._thread.is_alive()),
+        "message": status_msg,
+    }
