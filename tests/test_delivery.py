@@ -13,9 +13,12 @@ except ImportError:
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
+from geocongoai import Mtumishi
+from geocongoai.mtumishi.events import GeoTraceEvent
 from geocongoai.mtumishi.planner import MtumishiResult
 from worker.models import LeasedRun
-from worker.runtime import build_context, execute_run
+from worker.runtime import build_context, execute_run, collect_execution_steps
+from geocongoai.mtumishi.memory import MtumishiMemory
 from worker.realtime import MtumishiRealtimePublisher
 from worker.supabase_ops import SupabaseRunStore
 
@@ -58,6 +61,60 @@ class DeliveryTests(unittest.TestCase):
             result = self.execute(MtumishiResult(summary="Échec", status=status, steps=steps))
             self.assertEqual(result["status"], "failed")
             self.assertEqual(result["steps"], steps)
+
+    def test_missing_stream_results_are_recovered_from_real_sdk_memory(self):
+        memory = MtumishiMemory()
+        payload = {"satellite_preview_url": "outputs/preview.png", "geojson_url": "outputs/empty.json",
+                   "details": {"bbox": [25, -11, 26, -10]}}
+        memory.record_step("gundua_analyse_deterministe", {"analysis_type": "greenfield"}, payload)
+        starts = [{"tool": "gundua_analyse_deterministe", "status": "running"}]
+        with patch("worker.runtime.Mtumishi") as cls:
+            cls.return_value.memory = memory
+            cls.return_value.run_with_stream.return_value = MtumishiResult(summary="Fichiers produits", steps=[])
+            result = execute_run(self.run, self.config, on_event=lambda _: None, steps_collector=starts)
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(len(result["steps"]), 1)
+        self.assertEqual(result["steps"][0]["status"], "success")
+        self.assertEqual(result["steps"][0]["result"], payload)
+
+    def test_real_sdk_stream_without_toolresult_chunks_preserves_artifacts(self):
+        agent = Mtumishi(runtime_type="native")
+        payload = {"satellite_preview_url": "outputs/image.png", "details": {"bbox": [25, -11, 26, -10]}}
+        starts = []
+
+        async def stream(prompt, context_override=None):
+            yield GeoTraceEvent.tool_call("gundua_analyse_deterministe", {"analysis_type": "greenfield"})
+            agent.memory.record_step("gundua_analyse_deterministe", {"analysis_type": "greenfield"}, payload)
+            yield GeoTraceEvent.text("Résultats disponibles")
+
+        def on_event(event):
+            if event.type.value == "tool_call":
+                starts.append({"tool": event.metadata["tool"], "status": "running"})
+
+        agent.stream = stream
+        with patch("worker.runtime.Mtumishi", return_value=agent):
+            result = execute_run(self.run, self.config, on_event=on_event, steps_collector=starts)
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["steps"][0]["result"], payload)
+        self.assertEqual(result["steps"][0]["status"], "success")
+
+    def test_repeated_invocations_and_failures_are_preserved(self):
+        memory = MtumishiMemory()
+        memory.record_step("same", {"id": 1}, {"error": "first failed"}, status="error")
+        memory.record_step("same", {"id": 2}, {"geojson_url": "outputs/ok.json"})
+        starts = [{"tool": "same", "status": "running"}, {"tool": "same", "status": "running"}]
+        steps = collect_execution_steps([], memory.steps, starts, True)
+        self.assertEqual(len(steps), 2)
+        self.assertEqual([step["status"] for step in steps], ["error", "success"])
+
+    def test_unresolved_tool_starts_are_not_reported_as_completed(self):
+        with patch("worker.runtime.Mtumishi") as cls:
+            cls.return_value.memory.steps = []
+            cls.return_value.run_with_stream.return_value = MtumishiResult(summary="Terminé", steps=[])
+            result = execute_run(self.run, self.config, on_event=lambda _: None,
+                                 steps_collector=[{"tool": "gundua_analyse_deterministe", "status": "running"}])
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("n’ont pas pu être récupérés", result["summary"])
 
     def test_stream_exception_does_not_execute_analysis_twice(self):
         with patch("worker.runtime.Mtumishi") as cls:
