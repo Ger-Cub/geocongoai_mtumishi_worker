@@ -92,11 +92,26 @@ class SupabaseRunStore:
                 },
             ).execute()
 
-    def update_progress(self, run_id: str, steps: list, summary_fragment: Optional[str] = None) -> None:
-        """Update live progress during execution so web clients see real-time steps."""
+    def heartbeat(self, run_id: str, lease_seconds: int = 180) -> None:
+        """Extend the run lease so active long-running jobs never expire prematurely."""
         try:
+            from datetime import timedelta
+            lease_until = (datetime.now(timezone.utc) + timedelta(seconds=lease_seconds)).isoformat()
+            self.client.table("agent_runs").update({
+                "lease_until": lease_until,
+                "updated_at": utc_now_iso(),
+            }).eq("id", run_id).execute()
+        except Exception:
+            pass
+
+    def update_progress(self, run_id: str, steps: list, summary_fragment: Optional[str] = None, extend_lease_seconds: int = 180) -> None:
+        """Update live progress during execution and refresh the worker lease."""
+        try:
+            from datetime import timedelta
+            lease_until = (datetime.now(timezone.utc) + timedelta(seconds=extend_lease_seconds)).isoformat()
             payload: Dict[str, Any] = {
                 "steps_json": steps,
+                "lease_until": lease_until,
                 "updated_at": utc_now_iso(),
             }
             if summary_fragment is not None:

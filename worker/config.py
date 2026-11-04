@@ -42,10 +42,10 @@ def load_config() -> WorkerConfig:
         gemini_api_key=_require_env("GEMINI_API_KEY"),
         worker_id=worker_id,
         poll_seconds=float(os.getenv("MTUMISHI_POLL_SECONDS", "2")),
-        lease_seconds=int(os.getenv("MTUMISHI_LEASE_SECONDS", "120")),
+        lease_seconds=int(os.getenv("MTUMISHI_LEASE_SECONDS", "300")),
         qgis_rpc_port=int(os.getenv("MTUMISHI_QGIS_RPC_PORT", "65534")),
         default_reserved_units=int(os.getenv("MTUMISHI_DEFAULT_RESERVED_UNITS", "12")),
-        default_runtime=os.getenv("MTUMISHI_DEFAULT_RUNTIME", "native"),
-        default_model_name=os.getenv("MTUMISHI_MODEL_NAME", "gemini-2.5-flash"),
+        default_runtime=os.getenv("MTUMISHI_DEFAULT_RUNTIME", "antigravity"),
+        default_model_name=os.getenv("MTUMISHI_MODEL_NAME", "gemini-3.6-flash"),
         workspaces=workspaces or ["."],
     )

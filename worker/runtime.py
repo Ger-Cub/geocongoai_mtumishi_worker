@@ -24,6 +24,7 @@ def execute_run(
     run: LeasedRun,
     config: WorkerConfig,
     on_event: Optional[Callable[[Any], None]] = None,
+    steps_collector: Optional[list] = None,
 ) -> Dict[str, Any]:
     """Execute a single Mtumishi job."""
     # Detect execution environment: Web vs QGIS
@@ -104,6 +105,12 @@ def execute_run(
         if not str(st.get("tool", "")).startswith("dev_")
         and not (is_web and str(st.get("tool", "")).startswith("qgis_"))
     ]
+    if not cleaned_steps and steps_collector:
+        cleaned_steps = [
+            st for st in steps_collector
+            if not str(st.get("tool", "")).startswith("dev_")
+            and not (is_web and str(st.get("tool", "")).startswith("qgis_"))
+        ]
 
     # Automatically extract geospatial deliverables (GeoJSON and Raster Overlay)
     geojson_payload: Optional[Dict[str, Any]] = None
@@ -140,37 +147,37 @@ def execute_run(
                     if "CLAY_OH" in idx_upper or "CLAY" in idx_upper:
                         preview_url = (
                             f"https://planetarycomputer.microsoft.com/api/data/v1/item/preview.png?"
-                            f"collection=sentinel-2-l2a&item={scene_id}&expression=B11/B12&colormap_name=magma&rescale=1.0,2.4"
+                            f"collection=sentinel-2-l2a&item={scene_id}&expression=B11/B12&asset_as_band=True&colormap_name=magma&rescale=1.0,2.4"
                         )
                         overlay_name = f"Argiles & Altération Al-OH ({scene_id[:16]}...)"
                     elif "IRON_OXIDE" in idx_upper or "FERRIC" in idx_upper:
                         preview_url = (
                             f"https://planetarycomputer.microsoft.com/api/data/v1/item/preview.png?"
-                            f"collection=sentinel-2-l2a&item={scene_id}&expression=B04/B02&colormap_name=inferno&rescale=1.1,2.8"
+                            f"collection=sentinel-2-l2a&item={scene_id}&expression=B04/B02&asset_as_band=True&colormap_name=inferno&rescale=1.1,2.8"
                         )
                         overlay_name = f"Oxydes de Fer Fe3+ ({scene_id[:16]}...)"
                     elif "FERROUS" in idx_upper or "FERROUS_IRON" in idx_upper:
                         preview_url = (
                             f"https://planetarycomputer.microsoft.com/api/data/v1/item/preview.png?"
-                            f"collection=sentinel-2-l2a&item={scene_id}&expression=B12/B8A&colormap_name=spectral&rescale=0.7,2.2"
+                            f"collection=sentinel-2-l2a&item={scene_id}&expression=B12/B8A&asset_as_band=True&colormap_name=spectral&rescale=0.7,2.2"
                         )
                         overlay_name = f"Minéraux Ferreux Fe2+ ({scene_id[:16]}...)"
                     elif "CARBONATE_DOLOMITE" in idx_upper or "CARBONATE" in idx_upper:
                         preview_url = (
                             f"https://planetarycomputer.microsoft.com/api/data/v1/item/preview.png?"
-                            f"collection=sentinel-2-l2a&item={scene_id}&expression=(B08%2BB12)/B11&colormap_name=plasma&rescale=1.0,2.5"
+                            f"collection=sentinel-2-l2a&item={scene_id}&expression=(B08%2BB12)/B11&asset_as_band=True&colormap_name=plasma&rescale=1.0,2.5"
                         )
                         overlay_name = f"Carbonates & Dolomie ({scene_id[:16]}...)"
                     elif "GOSSAN" in idx_upper:
                         preview_url = (
                             f"https://planetarycomputer.microsoft.com/api/data/v1/item/preview.png?"
-                            f"collection=sentinel-2-l2a&item={scene_id}&expression=(B04/B03)*(B11/B08)&colormap_name=inferno&rescale=0.8,3.2"
+                            f"collection=sentinel-2-l2a&item={scene_id}&expression=(B04/B03)*(B11/B08)&asset_as_band=True&colormap_name=inferno&rescale=0.8,3.2"
                         )
                         overlay_name = f"Chapeau de Fer Gossan ({scene_id[:16]}...)"
                     elif "BSI" in idx_upper:
                         preview_url = (
                             f"https://planetarycomputer.microsoft.com/api/data/v1/item/preview.png?"
-                            f"collection=sentinel-2-l2a&item={scene_id}&expression=((B11%2BB04)-(B08%2BB02))/((B11%2BB04)%2B(B08%2BB02))&colormap_name=cividis&rescale=-0.2,0.55"
+                            f"collection=sentinel-2-l2a&item={scene_id}&expression=((B11%2BB04)-(B08%2BB02))/((B11%2BB04)%2B(B08%2BB02))&asset_as_band=True&colormap_name=cividis&rescale=-0.2,0.55"
                         )
                         overlay_name = f"Sol Nu & Affleurements BSI ({scene_id[:16]}...)"
                     elif "RGB_MINERAL" in idx_upper:
@@ -182,7 +189,7 @@ def execute_run(
                     elif "NDVI" in idx_upper:
                         preview_url = (
                             f"https://planetarycomputer.microsoft.com/api/data/v1/item/preview.png?"
-                            f"collection=sentinel-2-l2a&item={scene_id}&expression=(B08-B04)/(B08%2BB04)&colormap_name=viridis&rescale=-0.2,0.8"
+                            f"collection=sentinel-2-l2a&item={scene_id}&expression=(B08-B04)/(B08%2BB04)&asset_as_band=True&colormap_name=viridis&rescale=-0.2,0.8"
                         )
                         overlay_name = f"NDVI Sentinel-2 ({scene_id[:16]}...)"
                     else:

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 import time
 import traceback
 from typing import Any
@@ -87,8 +88,17 @@ def main() -> None:
                         store.update_progress(run.id, steps_collector, "".join(text_chunks))
                         last_update_time[0] = now
 
+        heartbeat_stop = threading.Event()
+
+        def _heartbeat_worker() -> None:
+            while not heartbeat_stop.wait(timeout=15):
+                store.heartbeat(run.id, lease_seconds=180)
+
+        hb_thread = threading.Thread(target=_heartbeat_worker, daemon=True)
+        hb_thread.start()
+
         try:
-            result = execute_run(run, config, on_event=_on_event)
+            result = execute_run(run, config, on_event=_on_event, steps_collector=steps_collector)
             units_final = estimate_final_units(run, result)
 
             if result.get("geojson"):
@@ -125,6 +135,8 @@ def main() -> None:
                 error_message=str(exc),
                 details={"traceback": traceback.format_exc()},
             )
+        finally:
+            heartbeat_stop.set()
 
 
 if __name__ == "__main__":
