@@ -1,8 +1,8 @@
 """Utilities to publish structured Mtumishi GIS events to Supabase Realtime."""
 from __future__ import annotations
 
-import json
-from typing import Any, Dict, List, Optional
+import logging
+from typing import Any, Dict, Optional
 
 from supabase import Client
 
@@ -20,7 +20,10 @@ class MtumishiRealtimePublisher:
             "event_name": event_name,
             "payload": payload or {},
         }
-        self.client.table("agent_run_events").insert(row).execute()
+        try:
+            self.client.table("agent_run_events").insert(row).execute()
+        except Exception:
+            logging.getLogger(__name__).exception("Realtime event publication failed for run %s", run_id)
 
     def emit_layer(self, run_id: str, layer_id: str, name: str, layer_type: str, payload: Dict[str, Any], *, visible: bool = True, opacity: float = 0.85) -> None:
         row = {
@@ -32,7 +35,10 @@ class MtumishiRealtimePublisher:
             "visible": visible,
             "opacity": opacity,
         }
-        self.client.table("agent_run_layers").upsert(row, on_conflict="layer_id").execute()
+        try:
+            self.client.table("agent_run_layers").upsert(row, on_conflict="run_id,layer_id").execute()
+        except Exception:
+            logging.getLogger(__name__).exception("GIS layer publication failed for run %s", run_id)
 
     def emit_geojson_layer(self, run_id: str, layer_id: str, geojson: Dict[str, Any], name: str, *, opacity: float = 0.85) -> None:
         self.emit_layer(

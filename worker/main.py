@@ -33,7 +33,12 @@ def main() -> None:
     logger.info("Worker started with id=%s", config.worker_id)
 
     while True:
-        run = store.lease_next_run()
+        try:
+            run = store.lease_next_run()
+        except Exception:
+            logger.exception("Unable to lease a run; retrying")
+            time.sleep(config.poll_seconds)
+            continue
         if run is None:
             time.sleep(config.poll_seconds)
             continue
@@ -99,7 +104,14 @@ def main() -> None:
 
         try:
             result = execute_run(run, config, on_event=_on_event, steps_collector=steps_collector)
+            if result.get("status") != "completed":
+                message = result.get("summary") or f"Agent returned status {result.get('status')!r}"
+                store.mark_failed(run, error_message=message, result=result)
+                realtime.emit(run.id, "run_failed", {"error": message}, event_name="run_failed")
+                continue
             units_final = estimate_final_units(run, result)
+            # Commit the durable result before optional live notifications.
+            store.mark_completed(run, result, units_final)
 
             if result.get("geojson"):
                 realtime.emit_geojson_layer(
@@ -125,16 +137,14 @@ def main() -> None:
                 )
 
             realtime.emit(run.id, "run_completed", {"status": "completed", "units_final": units_final, "summary": result.get("summary")}, event_name="run_completed")
-            store.mark_completed(run, result, units_final)
             logger.info("Completed run id=%s units_final=%s", run.id, units_final)
         except Exception as exc:
             logger.exception("Run failed id=%s", run.id)
             realtime.emit(run.id, "run_failed", {"error": str(exc), "traceback": traceback.format_exc()}, event_name="run_failed")
-            store.mark_failed(
-                run,
-                error_message=str(exc),
-                details={"traceback": traceback.format_exc()},
-            )
+            try:
+                store.mark_failed(run, error_message=str(exc), details={"traceback": traceback.format_exc()})
+            except Exception:
+                logger.exception("Unable to finalize failed run id=%s", run.id)
         finally:
             heartbeat_stop.set()
 
