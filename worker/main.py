@@ -32,6 +32,19 @@ def main() -> None:
 
     logger.info("Worker started with id=%s", config.worker_id)
 
+    # Démarrage du serveur API FastAPI (RAG géospatial multimodale) en arrière-plan
+    import os
+    http_enabled = os.getenv("MTUMISHI_HTTP_ENABLED", "1").lower() in ("1", "true", "yes")
+    if http_enabled:
+        api_port = int(os.getenv("MTUMISHI_HTTP_PORT", os.getenv("GEOSPATIAL_API_PORT", "8000")))
+        api_host = os.getenv("MTUMISHI_HTTP_HOST", "0.0.0.0")
+        logger.info("Starting Geospatial RAG FastAPI HTTP server on %s:%d", api_host, api_port)
+        def _run_server():
+            import uvicorn
+            uvicorn.run("worker.app:app", host=api_host, port=api_port, log_level="info")
+        http_thread = threading.Thread(target=_run_server, daemon=True)
+        http_thread.start()
+
     while True:
         try:
             run = store.lease_next_run()
