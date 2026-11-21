@@ -8,7 +8,7 @@ import traceback
 from typing import Any
 
 from worker.config import load_config
-from worker.runtime import estimate_final_units, execute_run
+from worker.runtime import estimate_final_units, execute_run, tool_failure
 from worker.supabase_ops import SupabaseRunStore
 from worker.realtime import MtumishiRealtimePublisher
 
@@ -95,11 +95,14 @@ def main() -> None:
                 if str(tool_name).startswith("dev_"):
                     return
                 res = meta.get("result")
-                status = meta.get("status") or "success"
+                error = tool_failure(res)
+                status = "error" if error else meta.get("status") or "success"
                 for st in reversed(steps_collector):
                     if st.get("tool") == tool_name and st.get("status") == "running":
                         st["status"] = status
                         st["result"] = res
+                        if error:
+                            st["error"] = error
                         break
                 store.update_progress(run.id, steps_collector)
                 realtime.emit(run.id, "tool_completed", {"tool": tool_name, "status": status, "result": res}, event_name=tool_name)

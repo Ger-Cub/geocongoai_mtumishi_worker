@@ -1,12 +1,15 @@
 """Supabase data access for the worker."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import logging
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
 from supabase import Client, create_client
 
 from worker.models import LeasedRun, WorkerConfig
+
+logger = logging.getLogger(__name__)
 
 
 def utc_now_iso() -> str:
@@ -69,31 +72,31 @@ class SupabaseRunStore:
 
     def heartbeat(self, run_id: str, lease_seconds: int = 180) -> None:
         """Extend the run lease so active long-running jobs never expire prematurely."""
-        try:
-            from datetime import timedelta
-            lease_until = (datetime.now(timezone.utc) + timedelta(seconds=lease_seconds)).isoformat()
-            self.client.table("agent_runs").update({
-                "lease_until": lease_until,
-                "updated_at": utc_now_iso(),
-            }).eq("id", run_id).execute()
-        except Exception:
-            pass
+        self._update_active_run(run_id, {}, lease_seconds)
 
     def update_progress(self, run_id: str, steps: list, summary_fragment: Optional[str] = None, extend_lease_seconds: int = 180) -> None:
         """Update live progress during execution and refresh the worker lease."""
+        payload: Dict[str, Any] = {"steps_json": steps}
+        if summary_fragment is not None:
+            payload["summary"] = summary_fragment
+        self._update_active_run(run_id, payload, extend_lease_seconds)
+
+    def _update_active_run(self, run_id: str, payload: Dict[str, Any], lease_seconds: int) -> None:
+        now = datetime.now(timezone.utc)
+        payload["lease_until"] = (now + timedelta(seconds=lease_seconds)).isoformat()
+        payload["updated_at"] = now.isoformat()
         try:
-            from datetime import timedelta
-            lease_until = (datetime.now(timezone.utc) + timedelta(seconds=extend_lease_seconds)).isoformat()
-            payload: Dict[str, Any] = {
-                "steps_json": steps,
-                "lease_until": lease_until,
-                "updated_at": utc_now_iso(),
-            }
-            if summary_fragment is not None:
-                payload["summary"] = summary_fragment
-            self.client.table("agent_runs").update(payload).eq("id", run_id).execute()
+            (
+                self.client.table("agent_runs")
+                .update(payload)
+                .eq("id", run_id)
+                .eq("status", "running")
+                .eq("worker_id", self.config.worker_id)
+                .gt("lease_until", now.isoformat())
+                .execute()
+            )
         except Exception:
-            pass
+            logger.exception("Failed to update active Mtumishi run %s", run_id)
 
     def mark_failed(self, run: LeasedRun, error_message: str, details: Optional[Dict[str, Any]] = None, result: Optional[Dict[str, Any]] = None) -> None:
         """Persist execution failures."""
