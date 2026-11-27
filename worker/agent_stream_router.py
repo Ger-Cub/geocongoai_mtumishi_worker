@@ -6,6 +6,8 @@ import json
 import logging
 import os
 import time
+import urllib.parse
+import urllib.request
 import uuid
 from collections import OrderedDict
 from typing import Any, AsyncIterator, Dict, List, Optional
@@ -148,6 +150,121 @@ def _register_web_tools(
                 "required": ["question"],
             },
             handler=_ask_user_confirmation,
+        )
+    )
+
+    def _geocode_place(query: str, limit: int = 3) -> Dict[str, Any]:
+        clean_query = (query or "").strip()
+        if not clean_query:
+            return {"status": "error", "error": "Le nom du lieu ne peut pas être vide."}
+
+        geocoding_base = (os.getenv("GEOCODING_API_URL") or "https://nominatim.openstreetmap.org").rstrip("/")
+        api_key = (os.getenv("GEOCODING_API_KEY") or "").strip()
+        params: Dict[str, Any] = {
+            "q": clean_query,
+            "format": "jsonv2",
+            "addressdetails": 1,
+            "limit": max(1, min(int(limit or 3), 5)),
+        }
+        if api_key:
+            params["key"] = api_key
+
+        url = f"{geocoding_base}/search?{urllib.parse.urlencode(params)}"
+        req = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": "GeoCongoAI/1.0 (gerardcubakabisimwa@gmail.com)",
+                "Referer": "https://www.geocongoai.com",
+                "Accept": "application/json",
+            },
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=12) as resp:
+                raw = json.loads(resp.read().decode("utf-8"))
+        except Exception as exc:
+            logger.warning("Geocoding lookup failed for %r: %s", clean_query, exc)
+            return {"status": "error", "error": f"Échec du géocodage pour '{clean_query}': {str(exc)[:200]}"}
+
+        if not isinstance(raw, list) or not raw:
+            return {"status": "not_found", "query": clean_query, "results": [], "message": f"Aucun lieu trouvé pour '{clean_query}'."}
+
+        parsed_results: List[Dict[str, Any]] = []
+        for item in raw:
+            try:
+                lat = float(item["lat"])
+                lon = float(item["lon"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            raw_bbox = item.get("boundingbox")
+            bbox = None
+            if isinstance(raw_bbox, list) and len(raw_bbox) == 4:
+                try:
+                    south, north, west, east = [float(x) for x in raw_bbox]
+                    bbox = [west, south, east, north]
+                except (TypeError, ValueError):
+                    bbox = None
+            parsed_results.append({
+                "display_name": item.get("display_name"),
+                "lat": lat,
+                "lon": lon,
+                "bbox": bbox,
+                "type": item.get("type"),
+                "address": item.get("address") or {},
+            })
+
+        if not parsed_results:
+            return {"status": "not_found", "query": clean_query, "results": []}
+
+        top = parsed_results[0]
+        features: List[Dict[str, Any]] = [
+            {
+                "type": "Feature",
+                "properties": {"name": top.get("display_name") or clean_query, "query": clean_query, "lat": top["lat"], "lon": top["lon"]},
+                "geometry": {"type": "Point", "coordinates": [top["lon"], top["lat"]]},
+            }
+        ]
+        if top.get("bbox"):
+            w, s, e, n = top["bbox"]
+            features.append({
+                "type": "Feature",
+                "properties": {"name": f"Emprise - {clean_query}", "bbox": top["bbox"]},
+                "geometry": {"type": "Polygon", "coordinates": [[[w, s], [e, s], [e, n], [w, n], [w, s]]]},
+            })
+
+        pending_deliverables.append({
+            "id": f"geocode-{uuid.uuid4().hex[:8]}",
+            "kind": "vector_layer",
+            "title": f"Localisation : {clean_query}",
+            "format": "geojson",
+            "displayable": True,
+            "geojson": {"type": "FeatureCollection", "features": features},
+            "bbox": top.get("bbox"),
+        })
+
+        return {
+            "status": "success",
+            "query": clean_query,
+            "lat": top["lat"],
+            "lon": top["lon"],
+            "bbox": top.get("bbox"),
+            "display_name": top.get("display_name"),
+            "address": top.get("address"),
+            "results": parsed_results,
+        }
+
+    mtumishi.register_tool(
+        GeoTool(
+            name="geocode_place",
+            description="Convertit un nom de lieu, ville, mine, province ou adresse (ex: 'Kolwezi', 'Goma', 'Parc des Virunga') en coordonnées géographiques (latitude, longitude, bbox) et l'affiche sur la carte.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Nom du lieu ou adresse à géocoder"},
+                    "limit": {"type": "integer", "description": "Nombre max de résultats (1 à 5)", "default": 3},
+                },
+                "required": ["query"],
+            },
+            handler=_geocode_place,
         )
     )
 
