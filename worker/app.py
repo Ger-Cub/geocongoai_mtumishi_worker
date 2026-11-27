@@ -7,13 +7,14 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from worker.geospatial_rag.router import router as geospatial_router
 from worker.chat_router import router as chat_router
+from worker.agent_stream_router import router as agent_stream_router
 
 logger = logging.getLogger("geocongoai.worker.app")
 
 app = FastAPI(
     title="GeoCongoAI Mtumishi Worker & Geospatial RAG API",
     description="Backend service for GeoCongoAI agent runs and multimodal satellite search",
-    version="1.2.0",
+    version="1.3.0",
 )
 
 # Autoriser les requêtes CORS depuis le frontend React
@@ -26,6 +27,7 @@ app.add_middleware(
 )
 
 # Monter les routeurs
+app.include_router(agent_stream_router)
 app.include_router(chat_router)
 app.include_router(geospatial_router)
 
@@ -35,8 +37,10 @@ def root():
     return {
         "service": "GeoCongoAI Mtumishi Worker",
         "status": "online",
-        "version": "1.2.0",
+        "version": "1.3.0",
         "endpoints": {
+            "agent_stream": "/api/v1/agent/stream",
+            "agent_health": "/api/v1/agent/health",
             "chat": "/api/v1/chat",
             "chat_health": "/api/v1/chat/health",
             "health": "/api/v1/geospatial-search/health",
